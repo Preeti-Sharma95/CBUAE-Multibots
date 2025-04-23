@@ -10,8 +10,7 @@ import base64
 class AccountInactivityChecker:
     """
     A class to identify savings, call, and current accounts that have been inactive
-    for 3 consecutive years (no customer-initiated transactions).
-    Specifically adapted for CBUAE_Compliance_Dormant_Dataset.csv format.
+    for a specified period (no customer-initiated transactions).
     """
 
     def __init__(self):
@@ -62,43 +61,43 @@ class AccountInactivityChecker:
         self.inactive_accounts = inactive_accounts
         return inactive_accounts
 
-    def mark_for_compliance_action(self, notify_years, freeze_years, escalate_years):
+    def categorize_by_inactivity(self, low_years, medium_years, high_years):
         """
-        Mark inactive accounts for appropriate compliance action.
+        Categorize inactive accounts by inactivity duration.
 
         Parameters:
         -----------
-        notify_years : float
-            Years of inactivity required for NOTIFY action
-        freeze_years : float
-            Years of inactivity required for FREEZE action
-        escalate_years : float
-            Years of inactivity required for ESCALATE action
+        low_years : float
+            Years of inactivity required for LOW category
+        medium_years : float
+            Years of inactivity required for MEDIUM category
+        high_years : float
+            Years of inactivity required for HIGH category
 
         Returns:
         --------
         pandas.DataFrame
-            DataFrame with recommended compliance actions
+            DataFrame with inactivity categories
         """
         if self.inactive_accounts is None or self.inactive_accounts.empty:
-            st.warning("No inactive accounts to mark for compliance action.")
+            st.warning("No inactive accounts to categorize.")
             return None
 
         # Make a copy to avoid SettingWithCopyWarning
         result_df = self.inactive_accounts.copy()
 
-        # Define compliance action based on inactivity duration
-        def determine_action(years_inactive):
-            if years_inactive > escalate_years:
-                return 'ESCALATE'
-            elif years_inactive > freeze_years:
-                return 'FREEZE'
-            elif years_inactive > notify_years:
-                return 'NOTIFY'
+        # Define inactivity category based on duration
+        def determine_category(years_inactive):
+            if years_inactive > high_years:
+                return 'HIGH'
+            elif years_inactive > medium_years:
+                return 'MEDIUM'
+            elif years_inactive > low_years:
+                return 'LOW'
             else:
                 return 'MONITOR'
 
-        result_df['recommended_action'] = result_df['years_inactive'].apply(determine_action)
+        result_df['inactivity_category'] = result_df['years_inactive'].apply(determine_category)
 
         # Add contact status
         def determine_contact_status(row):
@@ -119,8 +118,8 @@ class AccountInactivityChecker:
 
         result_df['contact_status'] = result_df.apply(determine_contact_status, axis=1)
 
-        # Add risk category based on account balance
-        def determine_risk(balance):
+        # Add amount category based on account balance
+        def determine_amount(balance):
             if balance > 300000:
                 return 'HIGH'
             elif balance > 100000:
@@ -128,27 +127,7 @@ class AccountInactivityChecker:
             else:
                 return 'LOW'
 
-        result_df['risk_category'] = result_df['Account Balance'].apply(determine_risk)
-
-        # Add compliance priority based on risk and inactivity
-        def determine_priority(row):
-            risk_score = {'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
-            action_score = {'ESCALATE': 3, 'FREEZE': 2, 'NOTIFY': 1, 'MONITOR': 0}
-            kyc_score = 2 if row['KYC Status'] == 'Expired' else 0
-
-            total_score = risk_score.get(row['risk_category'], 0) + action_score.get(row['recommended_action'],
-                                                                                     0) + kyc_score
-
-            if total_score >= 6:
-                return 'CRITICAL'
-            elif total_score >= 4:
-                return 'HIGH'
-            elif total_score >= 2:
-                return 'MEDIUM'
-            else:
-                return 'LOW'
-
-        result_df['compliance_priority'] = result_df.apply(determine_priority, axis=1)
+        result_df['amount_category'] = result_df['Account Balance'].apply(determine_amount)
 
         return result_df
 
@@ -168,20 +147,13 @@ class AccountInactivityChecker:
         # Count by customer type
         summary['customer_type_counts'] = self.inactive_accounts['Customer Type'].value_counts().to_dict()
 
-        # Count by KYC status
-        summary['kyc_status_counts'] = self.inactive_accounts['KYC Status'].value_counts().to_dict()
+        # Count by inactivity category
+        if 'inactivity_category' in self.inactive_accounts.columns:
+            summary['category_counts'] = self.inactive_accounts['inactivity_category'].value_counts().to_dict()
 
-        # Count by recommended action
-        if 'recommended_action' in self.inactive_accounts.columns:
-            summary['action_counts'] = self.inactive_accounts['recommended_action'].value_counts().to_dict()
-
-        # Count by risk category
-        if 'risk_category' in self.inactive_accounts.columns:
-            summary['risk_counts'] = self.inactive_accounts['risk_category'].value_counts().to_dict()
-
-        # Count by compliance priority
-        if 'compliance_priority' in self.inactive_accounts.columns:
-            summary['priority_counts'] = self.inactive_accounts['compliance_priority'].value_counts().to_dict()
+        # Count by amount category
+        if 'amount_category' in self.inactive_accounts.columns:
+            summary['amount_counts'] = self.inactive_accounts['amount_category'].value_counts().to_dict()
 
         # Count by contact status
         if 'contact_status' in self.inactive_accounts.columns:
@@ -207,32 +179,32 @@ def get_download_link(df, filename, text):
 def main():
     # Set page title and layout
     st.set_page_config(
-        page_title="CBUAE Dormant Account Checker",
+        page_title="Account Inactivity Checker",
         page_icon="💰",
         layout="wide",
     )
 
     # Create sidebar
-    st.sidebar.title("CBUAE Dormant Account Checker")
-    st.sidebar.markdown("Identify and analyze dormant accounts as per CBUAE requirements.")
+    st.sidebar.title("Account Inactivity Checker")
+    st.sidebar.markdown("Identify and analyze dormant accounts")
 
     # Initialize session state
     if 'checker' not in st.session_state:
         st.session_state.checker = AccountInactivityChecker()
     if 'results' not in st.session_state:
         st.session_state.results = None
-    if 'compliance_results' not in st.session_state:
-        st.session_state.compliance_results = None
+    if 'categorized_results' not in st.session_state:
+        st.session_state.categorized_results = None
     if 'summary_stats' not in st.session_state:
         st.session_state.summary_stats = None
 
     # Main app
-    st.title("CBUAE Dormant Account Checker")
-    st.markdown("Upload your account data to identify dormant accounts and generate compliance reports.")
+    st.title("Account Inactivity Checker")
+    st.markdown("Upload your account data to identify dormant accounts and generate reports.")
 
     # File upload section
     with st.sidebar.expander("📤 Upload Data", expanded=True):
-        accounts_file = st.file_uploader("Upload CBUAE Dormant Account CSV", type=['csv'])
+        accounts_file = st.file_uploader("Upload Account CSV", type=['csv'])
 
     # Parameters section
     with st.sidebar.expander("⚙️ Configure Parameters", expanded=True):
@@ -247,12 +219,11 @@ def main():
             default=["Savings/Call/Current"]
         )
 
-    # Compliance parameters
-    with st.sidebar.expander("🔍 Compliance Parameters", expanded=True):
-        notify_years = st.number_input("Years for NOTIFY Action", min_value=1.0, max_value=10.0, value=3.0, step=0.5)
-        freeze_years = st.number_input("Years for FREEZE Action", min_value=1.0, max_value=10.0, value=4.0, step=0.5)
-        escalate_years = st.number_input("Years for ESCALATE Action", min_value=1.0, max_value=10.0, value=5.0,
-                                         step=0.5)
+    # Categorization parameters
+    with st.sidebar.expander("🔍 Categorization Parameters", expanded=True):
+        low_years = st.number_input("Years for LOW Category", min_value=1.0, max_value=10.0, value=3.0, step=0.5)
+        medium_years = st.number_input("Years for MEDIUM Category", min_value=1.0, max_value=10.0, value=4.0, step=0.5)
+        high_years = st.number_input("Years for HIGH Category", min_value=1.0, max_value=10.0, value=5.0, step=0.5)
 
     # Process data if file is uploaded
     if accounts_file:
@@ -274,15 +245,15 @@ def main():
                     if results is not None and not results.empty:
                         st.session_state.results = results
 
-                        # Generate compliance recommendations
-                        compliance_results = checker.mark_for_compliance_action(
-                            notify_years=notify_years,
-                            freeze_years=freeze_years,
-                            escalate_years=escalate_years
+                        # Generate categorization
+                        categorized_results = checker.categorize_by_inactivity(
+                            low_years=low_years,
+                            medium_years=medium_years,
+                            high_years=high_years
                         )
 
-                        if compliance_results is not None:
-                            st.session_state.compliance_results = compliance_results
+                        if categorized_results is not None:
+                            st.session_state.categorized_results = categorized_results
 
                             # Calculate summary statistics
                             st.session_state.summary_stats = checker.get_summary_stats()
@@ -314,36 +285,26 @@ def main():
                     st.metric("Maximum Balance", f"AED {stats['max_balance']:,.2f}")
 
                 with col3:
-                    st.metric("KYC Expired", f"{stats['kyc_status_counts'].get('Expired', 0)}")
                     if 'contact_counts' in stats:
                         st.metric("No Contact Made", f"{stats['contact_counts'].get('No Contact', 0)}")
 
-                # Action summary section
-                if 'action_counts' in stats:
-                    st.header("Recommended Actions")
-                    action_cols = st.columns(4)
+                # Inactivity category section
+                if 'category_counts' in stats:
+                    st.header("Inactivity Categories")
+                    category_cols = st.columns(4)
 
-                    for i, (action, count) in enumerate(stats['action_counts'].items()):
-                        with action_cols[i % 4]:
-                            st.metric(f"{action}", f"{count}")
+                    for i, (category, count) in enumerate(stats['category_counts'].items()):
+                        with category_cols[i % 4]:
+                            st.metric(f"{category}", f"{count}")
 
-                # Risk summary section
-                if 'risk_counts' in stats:
-                    st.header("Risk Profile")
-                    risk_cols = st.columns(3)
+                # Amount category section
+                if 'amount_counts' in stats:
+                    st.header("Amount Profile")
+                    amount_cols = st.columns(3)
 
-                    for i, (risk, count) in enumerate(stats['risk_counts'].items()):
-                        with risk_cols[i % 3]:
-                            st.metric(f"{risk} Risk", f"{count}")
-
-                # Priority summary section
-                if 'priority_counts' in stats:
-                    st.header("Compliance Priority")
-                    priority_cols = st.columns(4)
-
-                    for i, (priority, count) in enumerate(stats['priority_counts'].items()):
-                        with priority_cols[i % 4]:
-                            st.metric(f"{priority} Priority", f"{count}")
+                    for i, (amount, count) in enumerate(stats['amount_counts'].items()):
+                        with amount_cols[i % 3]:
+                            st.metric(f"{amount} Amount", f"{count}")
 
                 # Distribution by account type
                 st.header("Distribution by Account Type")
@@ -371,96 +332,75 @@ def main():
 
         # Data table tab
         with tab2:
-            if st.session_state.compliance_results is not None:
+            if st.session_state.categorized_results is not None:
                 # Add filters
                 st.subheader("Filter Options")
-                filter_cols = st.columns(4)
+                filter_cols = st.columns(3)
 
                 with filter_cols[0]:
                     account_type_filter = st.multiselect(
                         "Account Type",
-                        options=st.session_state.compliance_results['Account Type'].unique(),
-                        default=st.session_state.compliance_results['Account Type'].unique()
+                        options=st.session_state.categorized_results['Account Type'].unique(),
+                        default=st.session_state.categorized_results['Account Type'].unique()
                     )
 
                 with filter_cols[1]:
                     branch_filter = st.multiselect(
                         "Branch",
-                        options=st.session_state.compliance_results['Branch'].unique(),
-                        default=st.session_state.compliance_results['Branch'].unique()
+                        options=st.session_state.categorized_results['Branch'].unique(),
+                        default=st.session_state.categorized_results['Branch'].unique()
                     )
 
                 with filter_cols[2]:
                     customer_type_filter = st.multiselect(
                         "Customer Type",
-                        options=st.session_state.compliance_results['Customer Type'].unique(),
-                        default=st.session_state.compliance_results['Customer Type'].unique()
-                    )
-
-                with filter_cols[3]:
-                    kyc_status_filter = st.multiselect(
-                        "KYC Status",
-                        options=st.session_state.compliance_results['KYC Status'].unique(),
-                        default=st.session_state.compliance_results['KYC Status'].unique()
+                        options=st.session_state.categorized_results['Customer Type'].unique(),
+                        default=st.session_state.categorized_results['Customer Type'].unique()
                     )
 
                 # Second row of filters
-                filter_cols2 = st.columns(3)
+                filter_cols2 = st.columns(2)
 
                 with filter_cols2[0]:
-                    if 'recommended_action' in st.session_state.compliance_results.columns:
-                        action_filter = st.multiselect(
-                            "Recommended Action",
-                            options=st.session_state.compliance_results['recommended_action'].unique(),
-                            default=st.session_state.compliance_results['recommended_action'].unique()
+                    if 'inactivity_category' in st.session_state.categorized_results.columns:
+                        category_filter = st.multiselect(
+                            "Inactivity Category",
+                            options=st.session_state.categorized_results['inactivity_category'].unique(),
+                            default=st.session_state.categorized_results['inactivity_category'].unique()
                         )
                     else:
-                        action_filter = None
+                        category_filter = None
 
                 with filter_cols2[1]:
-                    if 'risk_category' in st.session_state.compliance_results.columns:
-                        risk_filter = st.multiselect(
-                            "Risk Category",
-                            options=st.session_state.compliance_results['risk_category'].unique(),
-                            default=st.session_state.compliance_results['risk_category'].unique()
+                    if 'amount_category' in st.session_state.categorized_results.columns:
+                        amount_filter = st.multiselect(
+                            "Amount Category",
+                            options=st.session_state.categorized_results['amount_category'].unique(),
+                            default=st.session_state.categorized_results['amount_category'].unique()
                         )
                     else:
-                        risk_filter = None
-
-                with filter_cols2[2]:
-                    if 'compliance_priority' in st.session_state.compliance_results.columns:
-                        priority_filter = st.multiselect(
-                            "Compliance Priority",
-                            options=st.session_state.compliance_results['compliance_priority'].unique(),
-                            default=st.session_state.compliance_results['compliance_priority'].unique()
-                        )
-                    else:
-                        priority_filter = None
+                        amount_filter = None
 
                 # Apply filters
-                filtered_df = st.session_state.compliance_results[
-                    (st.session_state.compliance_results['Account Type'].isin(account_type_filter)) &
-                    (st.session_state.compliance_results['Branch'].isin(branch_filter)) &
-                    (st.session_state.compliance_results['Customer Type'].isin(customer_type_filter)) &
-                    (st.session_state.compliance_results['KYC Status'].isin(kyc_status_filter))
+                filtered_df = st.session_state.categorized_results[
+                    (st.session_state.categorized_results['Account Type'].isin(account_type_filter)) &
+                    (st.session_state.categorized_results['Branch'].isin(branch_filter)) &
+                    (st.session_state.categorized_results['Customer Type'].isin(customer_type_filter))
                     ]
 
-                if action_filter:
-                    filtered_df = filtered_df[filtered_df['recommended_action'].isin(action_filter)]
+                if category_filter:
+                    filtered_df = filtered_df[filtered_df['inactivity_category'].isin(category_filter)]
 
-                if risk_filter:
-                    filtered_df = filtered_df[filtered_df['risk_category'].isin(risk_filter)]
-
-                if priority_filter:
-                    filtered_df = filtered_df[filtered_df['compliance_priority'].isin(priority_filter)]
+                if amount_filter:
+                    filtered_df = filtered_df[filtered_df['amount_category'].isin(amount_filter)]
 
                 # Display table
-                st.subheader("Dormant Accounts")
+                st.subheader("Inactive Accounts")
                 st.dataframe(filtered_df, use_container_width=True)
 
         # Visualizations tab
         with tab3:
-            if st.session_state.compliance_results is not None:
+            if st.session_state.categorized_results is not None:
                 st.subheader("Account Distribution Analysis")
 
                 viz_cols = st.columns(2)
@@ -468,7 +408,7 @@ def main():
                 with viz_cols[0]:
                     # Account type distribution
                     fig1 = px.pie(
-                        st.session_state.compliance_results,
+                        st.session_state.categorized_results,
                         names='Account Type',
                         title='Distribution by Account Type',
                         color_discrete_sequence=px.colors.qualitative.Pastel
@@ -477,12 +417,12 @@ def main():
 
                     # Branch distribution
                     fig3 = px.bar(
-                        st.session_state.compliance_results['Branch'].value_counts().reset_index(),
-                        x='Branch',  # Changed from 'index'
-                        y='count',  # Changed from 'Branch'
+                        st.session_state.categorized_results['Branch'].value_counts().reset_index(),
+                        x='Branch',
+                        y='count',
                         title='Distribution by Branch',
                         labels={'Branch': 'Branch', 'count': 'Count'},
-                        color='Branch',  # Changed from 'index'
+                        color='Branch',
                         color_discrete_sequence=px.colors.qualitative.Bold
                     )
                     st.plotly_chart(fig3, use_container_width=True)
@@ -490,67 +430,55 @@ def main():
                 with viz_cols[1]:
                     # Customer type distribution
                     fig2 = px.pie(
-                        st.session_state.compliance_results,
+                        st.session_state.categorized_results,
                         names='Customer Type',
                         title='Distribution by Customer Type',
                         color_discrete_sequence=px.colors.qualitative.Safe
                     )
                     st.plotly_chart(fig2, use_container_width=True)
 
-                    # KYC status distribution
-                    fig4 = px.pie(
-                        st.session_state.compliance_results,
-                        names='KYC Status',
-                        title='Distribution by KYC Status',
-                        color_discrete_sequence=px.colors.qualitative.Set1
-                    )
-                    st.plotly_chart(fig4, use_container_width=True)
+                    # Contact status distribution
+                    if 'contact_status' in st.session_state.categorized_results.columns:
+                        fig4 = px.pie(
+                            st.session_state.categorized_results,
+                            names='contact_status',
+                            title='Distribution by Contact Status',
+                            color_discrete_sequence=px.colors.qualitative.Set1
+                        )
+                        st.plotly_chart(fig4, use_container_width=True)
 
-                st.subheader("Compliance Analysis")
+                st.subheader("Inactivity Analysis")
 
                 viz_cols2 = st.columns(2)
 
                 with viz_cols2[0]:
-                    # Recommended action distribution
-                    if 'recommended_action' in st.session_state.compliance_results.columns:
+                    # Inactivity category distribution
+                    if 'inactivity_category' in st.session_state.categorized_results.columns:
                         fig5 = px.bar(
-                            st.session_state.compliance_results['recommended_action'].value_counts().reset_index(),
-                            x='recommended_action',  # Changed from 'index'
-                            y='count',  # Changed from 'recommended_action'
-                            title='Recommended Actions',
-                            labels={'recommended_action': 'Action', 'count': 'Count'},
-                            color='recommended_action',  # Changed from 'index'
+                            st.session_state.categorized_results['inactivity_category'].value_counts().reset_index(),
+                            x='inactivity_category',
+                            y='count',
+                            title='Inactivity Categories',
+                            labels={'inactivity_category': 'Category', 'count': 'Count'},
+                            color='inactivity_category',
                             color_discrete_sequence=px.colors.qualitative.Vivid
                         )
                         st.plotly_chart(fig5, use_container_width=True)
 
-                    # Risk category distribution
-                    if 'risk_category' in st.session_state.compliance_results.columns:
+                    # Amount category distribution
+                    if 'amount_category' in st.session_state.categorized_results.columns:
                         fig6 = px.pie(
-                            st.session_state.compliance_results,
-                            names='risk_category',
-                            title='Distribution by Risk Category',
+                            st.session_state.categorized_results,
+                            names='amount_category',
+                            title='Distribution by Amount Category',
                             color_discrete_sequence=px.colors.sequential.Plasma
                         )
                         st.plotly_chart(fig6, use_container_width=True)
 
                 with viz_cols2[1]:
-                    # Compliance priority distribution
-                    if 'compliance_priority' in st.session_state.compliance_results.columns:
-                        fig7 = px.bar(
-                            st.session_state.compliance_results['compliance_priority'].value_counts().reset_index(),
-                            x='compliance_priority',  # Changed from 'index'
-                            y='count',  # Changed from 'compliance_priority'
-                            title='Compliance Priority',
-                            labels={'compliance_priority': 'Priority', 'count': 'Count'},
-                            color='compliance_priority',  # Changed from 'index'
-                            color_discrete_sequence=px.colors.sequential.Inferno
-                        )
-                        st.plotly_chart(fig7, use_container_width=True)
-
                     # Years inactive histogram
                     fig8 = px.histogram(
-                        st.session_state.compliance_results,
+                        st.session_state.categorized_results,
                         x='years_inactive',
                         title='Distribution of Inactivity Period',
                         labels={'years_inactive': 'Years Inactive', 'count': 'Number of Accounts'},
@@ -562,7 +490,7 @@ def main():
 
                 # Account balance by account type box plot
                 fig9 = px.box(
-                    st.session_state.compliance_results,
+                    st.session_state.categorized_results,
                     x='Account Type',
                     y='Account Balance',
                     title='Account Balance by Account Type',
@@ -576,7 +504,7 @@ def main():
                 with viz_cols3[0]:
                     # Account balance by branch
                     fig10 = px.box(
-                        st.session_state.compliance_results,
+                        st.session_state.categorized_results,
                         x='Branch',
                         y='Account Balance',
                         title='Account Balance by Branch',
@@ -588,7 +516,7 @@ def main():
                 with viz_cols3[1]:
                     # Account balance by customer type
                     fig11 = px.box(
-                        st.session_state.compliance_results,
+                        st.session_state.categorized_results,
                         x='Customer Type',
                         y='Account Balance',
                         title='Account Balance by Customer Type',
@@ -599,15 +527,15 @@ def main():
 
         # Export tab
         with tab4:
-            if st.session_state.compliance_results is not None:
+            if st.session_state.categorized_results is not None:
                 st.subheader("Export Results")
 
                 # Full report
                 st.markdown("### Full Report")
                 st.download_button(
-                    label="Download Full Dormant Account Report (CSV)",
-                    data=st.session_state.compliance_results.to_csv(index=False).encode('utf-8'),
-                    file_name="dormant_accounts_full_report.csv",
+                    label="Download Full Inactive Account Report (CSV)",
+                    data=st.session_state.categorized_results.to_csv(index=False).encode('utf-8'),
+                    file_name="inactive_accounts_full_report.csv",
                     mime="text/csv"
                 )
 
@@ -616,84 +544,85 @@ def main():
                 report_cols = st.columns(2)
 
                 with report_cols[0]:
-                    # High priority report
-                    if 'compliance_priority' in st.session_state.compliance_results.columns:
-                        critical_df = st.session_state.compliance_results[
-                            st.session_state.compliance_results['compliance_priority'] == 'CRITICAL'
+                    # High inactivity report
+                    if 'inactivity_category' in st.session_state.categorized_results.columns:
+                        high_df = st.session_state.categorized_results[
+                            st.session_state.categorized_results['inactivity_category'] == 'HIGH'
                             ]
 
-                        if not critical_df.empty:
+                        if not high_df.empty:
                             st.download_button(
-                                label="Download Critical Priority Accounts (CSV)",
-                                data=critical_df.to_csv(index=False).encode('utf-8'),
-                                file_name="dormant_accounts_critical_priority.csv",
+                                label="Download High Inactivity Accounts (CSV)",
+                                data=high_df.to_csv(index=False).encode('utf-8'),
+                                file_name="inactive_accounts_high_category.csv",
                                 mime="text/csv",
-                                key="download_critical"
+                                key="download_high"
                             )
 
-                    # KYC expired report
-                    kyc_expired_df = st.session_state.compliance_results[
-                        st.session_state.compliance_results['KYC Status'] == 'Expired'
-                        ]
-
-                    if not kyc_expired_df.empty:
-                        st.download_button(
-                            label="Download KYC Expired Accounts (CSV)",
-                            data=kyc_expired_df.to_csv(index=False).encode('utf-8'),
-                            file_name="dormant_accounts_kyc_expired.csv",
-                            mime="text/csv",
-                            key="download_kyc"
-                        )
-
-                with report_cols[1]:
                     # Savings/Call/Current report
-                    savings_df = st.session_state.compliance_results[
-                        st.session_state.compliance_results['Account Type'] == 'Savings/Call/Current'
+                    savings_df = st.session_state.categorized_results[
+                        st.session_state.categorized_results['Account Type'] == 'Savings/Call/Current'
                         ]
 
                     if not savings_df.empty:
                         st.download_button(
                             label="Download Savings/Call/Current Accounts (CSV)",
                             data=savings_df.to_csv(index=False).encode('utf-8'),
-                            file_name="dormant_accounts_savings_call_current.csv",
+                            file_name="inactive_accounts_savings_call_current.csv",
                             mime="text/csv",
                             key="download_savings"
                         )
 
+                with report_cols[1]:
                     # No contact report
-                    if 'contact_status' in st.session_state.compliance_results.columns:
-                        no_contact_df = st.session_state.compliance_results[
-                            st.session_state.compliance_results['contact_status'] == 'No Contact'
+                    if 'contact_status' in st.session_state.categorized_results.columns:
+                        no_contact_df = st.session_state.categorized_results[
+                            st.session_state.categorized_results['contact_status'] == 'No Contact'
                             ]
 
                         if not no_contact_df.empty:
                             st.download_button(
                                 label="Download No Contact Accounts (CSV)",
                                 data=no_contact_df.to_csv(index=False).encode('utf-8'),
-                                file_name="dormant_accounts_no_contact.csv",
+                                file_name="inactive_accounts_no_contact.csv",
                                 mime="text/csv",
                                 key="download_no_contact"
                             )
 
-                # Action-based reports
-                if 'recommended_action' in st.session_state.compliance_results.columns:
-                    st.markdown("### Action-Based Reports")
-                    action_report_cols = st.columns(3)
+                    # High amount report
+                    if 'amount_category' in st.session_state.categorized_results.columns:
+                        high_amount_df = st.session_state.categorized_results[
+                            st.session_state.categorized_results['amount_category'] == 'HIGH'
+                            ]
 
-                    actions = st.session_state.compliance_results['recommended_action'].unique()
-                    for i, action in enumerate(actions):
-                        with action_report_cols[i % 3]:
-                            action_df = st.session_state.compliance_results[
-                                st.session_state.compliance_results['recommended_action'] == action
+                        if not high_amount_df.empty:
+                            st.download_button(
+                                label="Download High Amount Accounts (CSV)",
+                                data=high_amount_df.to_csv(index=False).encode('utf-8'),
+                                file_name="inactive_accounts_high_amount.csv",
+                                mime="text/csv",
+                                key="download_high_amount"
+                            )
+
+                # Category-based reports
+                if 'inactivity_category' in st.session_state.categorized_results.columns:
+                    st.markdown("### Category-Based Reports")
+                    category_report_cols = st.columns(3)
+
+                    categories = st.session_state.categorized_results['inactivity_category'].unique()
+                    for i, category in enumerate(categories):
+                        with category_report_cols[i % 3]:
+                            category_df = st.session_state.categorized_results[
+                                st.session_state.categorized_results['inactivity_category'] == category
                                 ]
 
-                            if not action_df.empty:
+                            if not category_df.empty:
                                 st.download_button(
-                                    label=f"Download {action} Accounts (CSV)",
-                                    data=action_df.to_csv(index=False).encode('utf-8'),
-                                    file_name=f"dormant_accounts_{action.lower()}.csv",
+                                    label=f"Download {category} Accounts (CSV)",
+                                    data=category_df.to_csv(index=False).encode('utf-8'),
+                                    file_name=f"inactive_accounts_{category.lower()}.csv",
                                     mime="text/csv",
-                                    key=f"download_{action}"
+                                    key=f"download_{category}"
                                 )
 
 
