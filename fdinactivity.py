@@ -1,22 +1,23 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.express as px
 import plotly.graph_objects as go
 import io
 import base64
+import numpy as np
 
 # Set page configuration
 st.set_page_config(
-    page_title="FD Inactivity Checker Agent",
+    page_title="FD Inactivity Tracker",
     page_icon="💰",
     layout="wide"
 )
 
 # App title and description
-st.title("Fixed Deposit Inactivity Checker Agent")
+st.title("Fixed Deposit Inactivity Tracker")
 st.markdown("""
-This application identifies Fixed Deposit accounts that haven't been claimed or renewed within 3 years of maturity.
+This application tracks Fixed Deposit accounts that haven't been claimed or renewed within 3 years of maturity.
 Upload your account data CSV to begin analysis.
 """)
 
@@ -48,13 +49,13 @@ def calculate_maturity_status(df):
         (df['Years Since Last Transaction'] >= 2) & (df['Years Since Last Transaction'] < 3),
         (df['Years Since Last Transaction'] >= 3)
     ]
-    choices = ['Active', 'Approaching Inactivity', 'High Risk', 'Unclaimed/Inactive']
+    choices = ['Active', 'Approaching Inactivity', 'High Risk', 'Inactive']
     df['Maturity Status'] = pd.Series(np.select(conditions, choices, default='Unknown'), index=df.index)
 
     return df
 
 
-def generate_compliance_report(df):
+def generate_account_summary(df):
     # Filter for Fixed Deposit accounts
     fd_accounts = df[df['Account Type'] == 'Fixed Deposit']
 
@@ -64,7 +65,6 @@ def generate_compliance_report(df):
     active_fd = total_fd - inactive_fd
 
     inactive_value = fd_accounts[fd_accounts['Inactive Flag']]['Account Balance'].sum()
-    expired_kyc_inactive = len(fd_accounts[(fd_accounts['Inactive Flag']) & (fd_accounts['KYC Status'] == 'Expired')])
 
     # Generate branch statistics
     branch_stats = fd_accounts[fd_accounts['Inactive Flag']].groupby('Branch').agg(
@@ -77,7 +77,6 @@ def generate_compliance_report(df):
         'inactive_fd': inactive_fd,
         'active_fd': active_fd,
         'inactive_value': inactive_value,
-        'expired_kyc_inactive': expired_kyc_inactive,
         'branch_stats': branch_stats
     }
 
@@ -119,36 +118,30 @@ if uploaded_file is not None:
     try:
         df = pd.read_csv(uploaded_file)
 
-        # Add numpy import for the select function
-        import numpy as np
-
         # Process the data
         df = calculate_maturity_status(df)
 
-        # Generate compliance report
-        report = generate_compliance_report(df)
+        # Generate account summary
+        summary = generate_account_summary(df)
         contact_summary = get_contact_summary(df)
 
         # Display dashboard in tabs
-        tab1, tab2, tab3 = st.tabs(["Dashboard", "Account Details", "Compliance Report"])
+        tab1, tab2 = st.tabs(["Dashboard", "Account Details"])
 
         with tab1:
             # Key metrics
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
 
             with col1:
-                st.metric("Total FD Accounts", report['total_fd'])
+                st.metric("Total FD Accounts", summary['total_fd'])
 
             with col2:
-                st.metric("Inactive FD Accounts", report['inactive_fd'],
-                          f"{report['inactive_fd'] / report['total_fd'] * 100:.1f}%" if report[
+                st.metric("Inactive FD Accounts", summary['inactive_fd'],
+                          f"{summary['inactive_fd'] / summary['total_fd'] * 100:.1f}%" if summary[
                                                                                             'total_fd'] > 0 else "0%")
 
             with col3:
-                st.metric("Inactive Account Value", f"AED {report['inactive_value']:,.2f}")
-
-            with col4:
-                st.metric("Expired KYC & Inactive", report['expired_kyc_inactive'])
+                st.metric("Inactive Account Value", f"${summary['inactive_value']:,.2f}")
 
             # Charts row
             st.subheader("Visualizations")
@@ -167,13 +160,13 @@ if uploaded_file is not None:
                                   'Active': 'green',
                                   'Approaching Inactivity': 'yellow',
                                   'High Risk': 'orange',
-                                  'Unclaimed/Inactive': 'red'
+                                  'Inactive': 'red'
                               })
                 st.plotly_chart(fig1, use_container_width=True)
 
             with chart_col2:
                 # Bar chart showing inactive accounts by branch
-                branch_stats = report['branch_stats']
+                branch_stats = summary['branch_stats']
                 if not branch_stats.empty:
                     fig2 = px.bar(branch_stats, x='Branch', y='account_count',
                                   title='Inactive FD Accounts by Branch',
@@ -227,12 +220,12 @@ if uploaded_file is not None:
             st.subheader("Account Details")
 
             # Filters
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             with col1:
                 status_filter = st.multiselect(
                     "Filter by Maturity Status",
                     options=df['Maturity Status'].unique(),
-                    default=['Unclaimed/Inactive']
+                    default=['Inactive']
                 )
 
             with col2:
@@ -240,13 +233,6 @@ if uploaded_file is not None:
                     "Filter by Branch",
                     options=df['Branch'].unique(),
                     default=df['Branch'].unique()
-                )
-
-            with col3:
-                kyc_filter = st.multiselect(
-                    "Filter by KYC Status",
-                    options=df['KYC Status'].unique(),
-                    default=df['KYC Status'].unique()
                 )
 
             # Apply filters to FD accounts
@@ -258,99 +244,15 @@ if uploaded_file is not None:
             if branch_filter:
                 fd_accounts = fd_accounts[fd_accounts['Branch'].isin(branch_filter)]
 
-            if kyc_filter:
-                fd_accounts = fd_accounts[fd_accounts['KYC Status'].isin(kyc_filter)]
-
             # Display the filtered dataframe
             st.dataframe(fd_accounts[[
                 'Account ID', 'Branch', 'Customer Type', 'Account Balance',
-                'KYC Status', 'Last Transaction Date', 'Years Since Last Transaction',
+                'Last Transaction Date', 'Years Since Last Transaction',
                 'Maturity Status', 'Email Contact Attempt', 'SMS Contact Attempt', 'Phone Call Attempt'
             ]], use_container_width=True)
 
             # Download option
             st.markdown(get_download_link(fd_accounts, 'filtered_fd_accounts.csv', 'Download Filtered Data as CSV'),
-                        unsafe_allow_html=True)
-
-        with tab3:
-            st.subheader("Compliance Report")
-
-            # Summary metrics
-            st.markdown("### Summary")
-            st.markdown(f"""
-            - **Total Fixed Deposit Accounts**: {report['total_fd']}
-            - **Active Accounts**: {report['active_fd']} ({report['active_fd'] / report['total_fd'] * 100:.1f}% of total)
-            - **Inactive Accounts**: {report['inactive_fd']} ({report['inactive_fd'] / report['total_fd'] * 100:.1f}% of total)
-            - **Total Value of Inactive Accounts**: AED {report['inactive_value']:,.2f}
-            - **Inactive Accounts with Expired KYC**: {report['expired_kyc_inactive']} ({report['expired_kyc_inactive'] / report['inactive_fd'] * 100:.1f}% of inactive accounts)
-            """)
-
-            # Branch breakdown
-            st.markdown("### Branch Breakdown")
-            branch_stats = report['branch_stats']
-            if not branch_stats.empty:
-                branch_stats['total_balance'] = branch_stats['total_balance'].map("AED {:,.2f}".format)
-                st.dataframe(branch_stats, use_container_width=True)
-            else:
-                st.info("No inactive accounts found in the dataset.")
-
-            # Contact attempts
-            st.markdown("### Contact Attempts")
-            st.markdown(f"""
-            - **Accounts with Email Contact**: {contact_summary['email_attempts']} ({contact_summary['email_attempts'] / contact_summary['total'] * 100:.1f}% of inactive accounts)
-            - **Accounts with SMS Contact**: {contact_summary['sms_attempts']} ({contact_summary['sms_attempts'] / contact_summary['total'] * 100:.1f}% of inactive accounts)
-            - **Accounts with Phone Contact**: {contact_summary['phone_attempts']} ({contact_summary['phone_attempts'] / contact_summary['total'] * 100:.1f}% of inactive accounts)
-            - **Accounts with No Contact Attempts**: {contact_summary['no_contact']} ({contact_summary['no_contact'] / contact_summary['total'] * 100:.1f}% of inactive accounts)
-            """)
-
-            # Recommendations
-            st.markdown("### Recommendations")
-
-            # Generate recommendations based on the data
-            recommendations = []
-
-            if report['inactive_fd'] > 0:
-                recommendations.append(
-                    "Initiate a dedicated outreach program for all identified inactive accounts, prioritizing those with highest balances.")
-
-            if report['expired_kyc_inactive'] > 0:
-                recommendations.append(
-                    f"Update KYC for {report['expired_kyc_inactive']} accounts with expired documentation.")
-
-            if contact_summary['no_contact'] > 0:
-                recommendations.append(
-                    f"Establish contact with {contact_summary['no_contact']} accounts that have had no previous contact attempts.")
-
-            if len(branch_stats) > 0:
-                max_branch = branch_stats.loc[branch_stats['account_count'].idxmax()]['Branch']
-                recommendations.append(
-                    f"Focus on {max_branch} branch which has the highest number of inactive accounts.")
-
-            # Display recommendations
-            for i, rec in enumerate(recommendations, 1):
-                st.markdown(f"{i}. {rec}")
-
-            # Download full report option
-            st.markdown("### Download Full Report")
-
-            # Create a DataFrame for the full report
-            report_data = {
-                'Metric': [
-                    'Total FD Accounts', 'Active Accounts', 'Inactive Accounts',
-                    'Inactive Account Value', 'Expired KYC & Inactive',
-                    'Email Contact Attempts', 'SMS Contact Attempts', 'Phone Contact Attempts',
-                    'No Contact Attempts'
-                ],
-                'Value': [
-                    report['total_fd'], report['active_fd'], report['inactive_fd'],
-                    report['inactive_value'], report['expired_kyc_inactive'],
-                    contact_summary['email_attempts'], contact_summary['sms_attempts'],
-                    contact_summary['phone_attempts'], contact_summary['no_contact']
-                ]
-            }
-            report_df = pd.DataFrame(report_data)
-
-            st.markdown(get_download_link(report_df, 'fd_compliance_report.csv', 'Download Full Report as CSV'),
                         unsafe_allow_html=True)
 
     except Exception as e:
@@ -363,11 +265,10 @@ else:
     st.markdown("### Expected CSV Format:")
     sample_data = {
         'Account ID': ['ACC0001', 'ACC0002'],
-        'Account Type': ['Fixed Deposit', 'Savings/Call/Current'],
-        'Branch': ['Abu Dhabi', 'Dubai'],
-        'Customer Type': ['Retail', 'Corporate'],
+        'Account Type': ['Fixed Deposit', 'Savings'],
+        'Branch': ['Main Branch', 'Downtown'],
+        'Customer Type': ['Individual', 'Business'],
         'Account Balance': [50000, 75000],
-        'KYC Status': ['Valid', 'Expired'],
         'Last Transaction Date': ['2022-01-01', '2020-01-01'],
         'Email Contact Attempt': ['Yes', 'No'],
         'SMS Contact Attempt': ['Yes', 'Yes'],
@@ -378,4 +279,4 @@ else:
 
 # Footer
 st.markdown("---")
-st.markdown("© 2025 CBUAE Compliance Monitoring System. All rights reserved.")
+st.markdown("© 2025 FD Inactivity Tracker")
